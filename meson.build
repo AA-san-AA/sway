@@ -37,10 +37,28 @@ endif
 
 jsonc = dependency('json-c', version: '>=0.13')
 pcre = dependency('libpcre')
-wayland_server = dependency('wayland-server', version: '>=1.20.0')
-wayland_client = dependency('wayland-client')
-wayland_cursor = dependency('wayland-cursor')
-wayland_egl = dependency('wayland-egl')
+
+# support wayland subproject
+wayland_proj = subproject('wayland')
+
+if wayland_proj.found()
+    wayland_server = wayland_proj.get_variable('wayland_server_dep')
+    wayland_client = wayland_proj.get_variable('wayland_client_dep')
+    wayland_cursor = wayland_proj.get_variable('wayland_cursor_dep')
+    wayland_egl = wayland_proj.get_variable('wayland_egl_dep')
+else
+    wayland_server = dependency('wayland-server', version: '>=1.20.0')
+    wayland_client = dependency('wayland-client')
+    wayland_cursor = dependency('wayland-cursor')
+    wayland_egl = dependency('wayland-egl')
+endif
+
+# wayland_protocols_proj = subproject('wayland-protocols')
+# if wayland_protocols_proj.found()
+#     wayland_protos = wayland_protocols_proj.get_variable('wayland_protocols')
+# else
+#     wayland_protos = dependency('wayland-protocols', version: '>=1.24')
+# endif
 wayland_protos = dependency('wayland-protocols', version: '>=1.24')
 xkbcommon = dependency('xkbcommon')
 cairo = dependency('cairo')
@@ -64,7 +82,7 @@ rt = cc.find_library('rt')
 wlroots_version = ['>=0.15.0', '<0.16.0']
 wlroots_proj = subproject(
 	'wlroots',
-	default_options: ['examples=false'],
+	default_options: ['examples=true'],
 	required: false,
 	version: wlroots_version,
 )
@@ -325,3 +343,39 @@ summary({
 	'man-pages': scdoc.found(),
 }, bool_yn: true)
 
+# # support swaybg
+# swaybg_version = '>=1.2.0'
+# swaybg_proj = subproject(
+#     'swaybg',
+#     required: true,  # 强制依赖设置为true，如果swaybg是可选的，你可以设置为false。
+#     version: swaybg_version,
+# )
+# # swaybg_dep = swaybg_proj.get_variable('swaybg_dep')
+
+# # support seatd
+# seatd_proj = subproject(
+#     'seatd',
+#     required: true,
+# )
+
+# # support foot
+# foot_proj = subproject(
+#     'foot',
+#     default_options: ['tests=false', 'werror=false'],
+#     required: true,
+# )
+
+# support swappy
+# swappy_proj = subproject(
+#     'swappy',
+#     default_options: ['werror=false'],
+#     required: true,
+# )
+
+# support gtk+-3.0
+# default_options: ['x11-backend=false', 'media-gstreamer=disabled', 'build-testsuite=false'],
+#gtk_proj = subproject(
+#    'gtk',
+#    default_options: ['x11_backend=false'],
+#    required: true
+#)
