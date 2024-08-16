@@ -9,7 +9,8 @@ build-*/
 .lvimrc
 config-debug
 wayland-*-protocol.*
-subprojects
+subprojects/*
+!subprojects/*.wrap
 .vscode
 build
 sway_install
