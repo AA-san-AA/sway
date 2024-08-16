@@ -238,6 +238,7 @@ subdir('protocols')
 subdir('common')
 subdir('sway')
 subdir('swaymsg')
+subdir('hello-wayland')
 
 if get_option('swaybar') or get_option('swaynag')
 	subdir('client')
