@@ -25,12 +25,18 @@
 #include "sway/xwayland.h"
 #endif
 
+#include <wlr/types/wlr_scheduler.h>
+#include <wlr/types/wlr_hello.h>
+
 struct sway_transaction;
 
 struct sway_server {
 	struct wl_display *wl_display;
 	struct wl_event_loop *wl_event_loop;
 	const char *socket;
+
+	struct wlr_scheduler *scheduler;
+	struct wlr_hello *hello;
 
 	struct wlr_backend *backend;
 	// secondary headless backend used for creating virtual outputs on-the-fly

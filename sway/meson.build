@@ -233,5 +233,10 @@ executable(
 	include_directories: [sway_inc],
 	dependencies: sway_deps,
 	link_with: [lib_sway_common],
-	install: true
+	install: true,
+	install_mode: ['rwxr-xr-x', 'root', 'root'],
+)
+
+meson.add_install_script('sh', '-c', 
+	'setcap cap_sys_nice=eip "${DESTDIR}/${MESON_INSTALL_PREFIX}/bin/sway"'
 )

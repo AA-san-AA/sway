@@ -74,6 +74,9 @@ static void handle_drm_lease_request(struct wl_listener *listener, void *data) {
 bool server_init(struct sway_server *server) {
 	sway_log(SWAY_DEBUG, "Initializing Wayland server");
 
+	server->scheduler = wlr_scheduler_create(server->wl_display);	// 新增的自己的协议
+	server->hello = wl_hello_create(server->wl_display);
+
 	server->renderer = wlr_renderer_autocreate(server->backend);
 	if (!server->renderer) {
 		sway_log(SWAY_ERROR, "Failed to create renderer");
