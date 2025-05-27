@@ -1,4 +1,6 @@
+#if !defined(_C99)
 #define _POSIX_C_SOURCE 200809L
+#endif
 #include <assert.h>
 #include <drm_fourcc.h>
 #include <stdint.h>
@@ -11,8 +13,26 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/render/drm_format_set.h>
 #include "linux-dmabuf-unstable-v1-protocol.h"
+
+#define __vxworks__ 1
+#if defined(__vxworks__)
+#include <float.h>
+#include <limits.h>
+#include <wlr/backend.h>
+#include <wlr/render/wlr_renderer.h>
+#include "cairo_util.h"
+#else
 #include "cairo_util.h"
 #include "pango.h"
+#endif
+
+// #define __freetype__
+#if defined(__freetype__)
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include <cairo-ft.h>
+#endif
+
 #include "sway/config.h"
 #include "sway/desktop.h"
 #include "sway/desktop/transaction.h"
@@ -495,6 +515,214 @@ struct sway_output *container_get_effective_output(struct sway_container *con) {
 	return con->outputs->items[con->outputs->length - 1];
 }
 
+#if defined(__vxworks__)
+// 获取字体高度
+void get_text_metrics_cairo(struct sway_output *output, const char *font, int *height, int *baseline) {
+	double scale = output->wlr_output->scale;
+	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cairo_t *cr = cairo_create(surface);
+	cairo_select_font_face(cr, font, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(cr, 15.0 * scale);  
+
+	cairo_font_extents_t fe;
+	cairo_font_extents(cr, &fe);
+
+	*baseline = fe.ascent;
+	*height = fe.height;
+
+	cairo_destroy(cr);
+	cairo_surface_destroy(surface);
+}
+// 更新字体，标题栏高度
+void config_update_font_height_cairo(struct sway_output *output) {
+	int prev_max_height = config->font_height;
+
+	get_text_metrics_cairo(output, config->font, &config->font_height, &config->font_baseline);
+
+	if (config->font_height != prev_max_height) {
+		arrange_root();
+	}
+}
+
+// 清除pango的格式标签
+static void strip_markup(char *text) {
+	char *src = text, *dst = text;
+	bool in_tag = false;
+
+	while (*src) {
+		if (*src == '<') {
+			in_tag = true;
+		} else if (*src == '>') {
+			in_tag = false;
+			src++;
+			continue;
+		} else if (!in_tag) {
+			*dst++ = *src;
+		}
+		src++;
+	}
+	*dst = '\0';
+}
+
+#if defined(__freetype__)
+extern unsigned char _binary__usr_share_fonts_truetype_dejavu_DejaVuSansMono_ttf_start[];
+extern unsigned char _binary__usr_share_fonts_truetype_dejavu_DejaVuSansMono_ttf_end[];
+#endif 
+
+static void render_titlebar_text_texture(struct sway_output *output,
+		struct sway_container *con, struct wlr_texture **texture,
+		struct border_colors *class, bool pango_markup, char *text) {
+	
+	sway_log(SWAY_DEBUG, "Rendering title texture for container %p, text=\"%s\"", con, text);
+	sway_log(SWAY_DEBUG, "Actual container title: \"%s\"", con->title);
+	
+	if (!text || strlen(text) == 0) {
+		sway_log(SWAY_DEBUG, "Titlebar text is empty, skipping.");
+		return;
+	}
+	// 清除pango格式标签
+	char clean_text[512];
+	strncpy(clean_text, text, sizeof(clean_text) - 1);
+	clean_text[sizeof(clean_text) - 1] = '\0';
+
+	strip_markup(clean_text);
+	
+	
+	// 屏幕缩放因子 和 字体大小
+	double scale = output->wlr_output->scale;
+	double font_size = config->font_height * scale;
+
+	config_update_font_height_cairo(output);
+	cairo_surface_t *dummy_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cairo_t *dummy_cr = cairo_create(dummy_surface);
+#if defined(__freetype__)
+	size_t font_data_size = _binary__usr_share_fonts_truetype_dejavu_DejaVuSansMono_ttf_end -
+                        	_binary__usr_share_fonts_truetype_dejavu_DejaVuSansMono_ttf_start;
+
+	// 创建 FT_Library 和 FT_Face
+	FT_Library ft_library;
+    if (FT_Init_FreeType(&ft_library)) {
+        fprintf(stderr, "无法初始化 FreeType\n");
+        return 1;
+    }
+	FT_Face ft_face;
+	if(FT_New_Memory_Face(ft_library,
+					(const FT_Byte *)_binary__usr_share_fonts_truetype_dejavu_DejaVuSansMono_ttf_start,
+					font_data_size, 
+					0, &ft_face)){
+						fprintf(stderr, "无法加载字体\n");
+						FT_Done_FreeType(ft_face);
+						return 1;
+			}
+
+	// 字体大小为 24 像素
+	FT_Set_Pixel_Sizes(ft_face, 0, (FT_UInt)(font_size / scale));
+
+	// 创建 cairo font face
+	cairo_font_face_t *cairo_ft_face = cairo_ft_font_face_create_for_ft_face(ft_face, 0);
+	cairo_set_font_face(dummy_cr, cairo_ft_face);
+	cairo_set_font_size(dummy_cr, font_size);
+#else
+	cairo_select_font_face(dummy_cr, "DejaVu Sans Mono", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(dummy_cr, font_size);
+#endif
+
+	// 测量的是 具体一串文字（如 "foot"）的 宽度、高度
+	cairo_text_extents_t extents;
+	cairo_text_extents(dummy_cr, clean_text, &extents);
+
+	double padding = 1 * scale;
+	int width = ceil(extents.width + padding * 2);
+	int height = ceil(font_size + padding * 2);
+	
+	sway_log(SWAY_DEBUG, "Rendering title: \"%s\"", clean_text);
+	sway_log(SWAY_DEBUG, "Text extents: width=%.2f, height=%.2f", extents.width, font_size);
+	sway_log(SWAY_DEBUG, "Surface size: %dx%d", width, height);
+
+	cairo_destroy(dummy_cr);
+	cairo_surface_destroy(dummy_surface);
+
+	// 2. 创建实际渲染 surface
+	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+	cairo_t *cr = cairo_create(surface);
+
+	// 3. 绘制背景色
+	cairo_set_source_rgba(cr,
+		class->background[0],
+		class->background[1],
+		class->background[2],
+		class->background[3]);
+	cairo_paint(cr);
+	// 4. 绘制文字
+#if defined(__freetype__)
+	cairo_set_font_face(cr, cairo_ft_face);
+	cairo_set_font_size(cr, font_size);
+#else
+	cairo_select_font_face(cr, "DejaVu Sans Mono", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(cr, font_size);
+#endif
+
+	cairo_set_source_rgba(cr,
+		class->text[0],
+		class->text[1],
+		class->text[2],
+		class->text[3]);
+
+	// 描述的是整个字体 face 的ascent / descent / height 信息。
+	// fe.ascent   - 字体向上的高度：从 baseline（基线）到字体顶部的距离。
+	// fe.descent  - 字体向下的高度：从 baseline 到字体底部的距离
+	// fe.height   - 建议的行高
+	// baseline的概念： 类似于字母：y g ,比正常字母偏下（多个尾巴）
+	cairo_font_extents_t fe;
+	cairo_font_extents(cr, &fe);
+	// 这儿设置的是文字在surface中的位置，我们创的surface位置是固定的由compositor决定的。
+	double x = padding - extents.x_bearing;
+	double y = fe.ascent - padding;  // 近似居中
+	
+	// baseline
+	// cairo_set_source_rgba(cr, 1.0, 0, 0, 0.8);  // 红色
+	// cairo_move_to(cr, 0, y);
+	// cairo_line_to(cr, width, y);
+	// cairo_stroke(cr);
+
+	// 边框
+	// cairo_set_source_rgba(cr, 0, 1.0, 0, 0.5);  // 绿色
+	// cairo_rectangle(cr, 0, 0, width, height);
+	// cairo_stroke(cr);
+
+	cairo_move_to(cr, x, y);
+	cairo_show_text(cr, clean_text);
+	cairo_surface_flush(surface);
+
+	cairo_destroy(cr);
+
+	// 5. 创建纹理
+	int stride = cairo_image_surface_get_stride(surface);
+	unsigned char *data = cairo_image_surface_get_data(surface);
+	struct wlr_renderer *renderer = output->wlr_output->renderer;
+
+	if (*texture) {
+		wlr_texture_destroy(*texture);
+	}
+	*texture = wlr_texture_from_pixels(renderer,
+	                                   DRM_FORMAT_ARGB8888,
+	                                   stride,
+	                                   width, height,
+	                                   data);
+	if (!*texture) {
+		sway_log(SWAY_ERROR, "Failed to create texture from text surface.");
+	} else {
+		sway_log(SWAY_DEBUG, "Created texture from text surface successfully.");
+	}
+
+	cairo_surface_destroy(surface);
+#if defined(__freetype__)
+	cairo_font_face_destroy(cairo_ft_face);
+	FT_Done_Face(ft_face);
+	FT_Done_FreeType(ft_library);
+#endif
+}
+#else
 static void render_titlebar_text_texture(struct sway_output *output,
 		struct sway_container *con, struct wlr_texture **texture,
 		struct border_colors *class, bool pango_markup, char *text) {
@@ -565,6 +793,7 @@ static void render_titlebar_text_texture(struct sway_output *output,
 	g_object_unref(pango);
 	cairo_destroy(cairo);
 }
+#endif
 
 static void update_title_texture(struct sway_container *con,
 		struct wlr_texture **texture, struct border_colors *class) {
@@ -579,9 +808,13 @@ static void update_title_texture(struct sway_container *con,
 	if (!con->formatted_title) {
 		return;
 	}
-
+#if defined(__vxworks__)
+    sway_log(SWAY_ERROR, "[update_title_texture]:not supported cairo & pango");
+	render_titlebar_text_texture(output, con, texture, class, false, con->formatted_title);
+#else
 	render_titlebar_text_texture(output, con, texture, class,
 		config->pango_markup, con->formatted_title);
+#endif
 }
 
 void container_update_title_textures(struct sway_container *container) {
@@ -1082,6 +1315,8 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 		}
 	}
 
+#if defined(__vxworks__)
+#else
 	if (!server.linux_dmabuf_v1 || !con->view->surface) {
 		return;
 	}
@@ -1090,6 +1325,7 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 			con->view->surface, NULL);
 		return;
 	}
+#endif
 
 	if (!con->pending.workspace || !con->pending.workspace->output) {
 		return;
@@ -1100,6 +1336,8 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 
 	// TODO: add wlroots helpers for all of this stuff
 
+#if defined(__vxworks__)
+#else
 	const struct wlr_drm_format_set *renderer_formats =
 		wlr_renderer_get_dmabuf_texture_formats(server.renderer);
 	assert(renderer_formats);
@@ -1128,7 +1366,7 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 			output_formats, renderer_formats)) {
 		return;
 	}
-
+	
 	struct wlr_linux_dmabuf_feedback_v1_tranche tranches[] = {
 		{
 			.target_device = scanout_dev,
@@ -1140,7 +1378,7 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 			.formats = renderer_formats,
 		},
 	};
-
+	
 	const struct wlr_linux_dmabuf_feedback_v1 feedback = {
 		.main_device = render_dev,
 		.tranches = tranches,
@@ -1150,6 +1388,7 @@ static void set_fullscreen(struct sway_container *con, bool enable) {
 		con->view->surface, &feedback);
 
 	wlr_drm_format_set_finish(&scanout_formats);
+#endif
 }
 
 static void container_fullscreen_workspace(struct sway_container *con) {
@@ -1710,7 +1949,12 @@ static void update_marks_texture(struct sway_container *con,
 	}
 	free(part);
 
+#if defined(__vxworks__)
+    sway_log(SWAY_ERROR, "[update_marks_texture]:not supported cairo & pango");
 	render_titlebar_text_texture(output, con, texture, class, false, buffer);
+#else
+	render_titlebar_text_texture(output, con, texture, class, false, buffer);
+#endif
 
 	free(buffer);
 }
