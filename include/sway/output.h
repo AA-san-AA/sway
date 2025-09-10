@@ -16,6 +16,12 @@
 struct sway_fps_overlay {
 	size_t frame_count;
 	size_t current_fps;
+	size_t dropped_frames;
+
+	double avg_frametime;
+	double frame_time_accum;
+
+	struct timespec last_frame_time;
 	struct timespec last_time;
 	struct wlr_texture *texture;
 	int width;

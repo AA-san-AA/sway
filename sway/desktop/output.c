@@ -573,40 +573,74 @@ static void update_fps_texture(struct sway_output *output, struct wlr_renderer *
     double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
                      (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
 
+	double frame_time = (now.tv_sec - fps->last_frame_time.tv_sec) +
+                        (now.tv_nsec - fps->last_frame_time.tv_nsec) / 1e9;
+
+	fps->last_frame_time = now;
+
+	// 输出信息获取
+	float refresh_hz = output->wlr_output->refresh / 1000.0f;
+
+    // 平均帧耗时与掉帧判断
+    fps->frame_time_accum += frame_time;
+    fps->frame_count++;
+
+    double expected_frametime = 1.0 / refresh_hz; // 假设目标 60fps
+    if (frame_time > expected_frametime * 1.5) {
+        fps->dropped_frames++;
+    }
+
     if (elapsed < 1.0) {
         return; // 每秒更新一次
     }
 
     fps->current_fps = fps->frame_count;
+	fps->avg_frametime = fps->frame_time_accum / fps->frame_count;
+    fps->frame_time_accum = 0;
     fps->frame_count = 0;
     fps->last_time = now;
 
     // 文本内容
     char text[64];
-    snprintf(text, sizeof(text), "FPS: %zu", fps->current_fps);
+    snprintf(text, sizeof(text),
+			"FPS: %zu\n"
+			"Avg: %.1f ms\n"
+			"Drop: %zu\n"
+			"Refresh: %.0f Hz",
+			fps->current_fps,
+			fps->avg_frametime * 1000,
+			fps->dropped_frames,
+			refresh_hz);
 
     // Cairo 渲染
-    int width = 200;
-    int height = 50;
-    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    int surface_width = 180;
+    int line_height = 18;
+    int line_count = 4;
+    int surface_height = line_height * line_count + 10;
+
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                                          surface_width, surface_height);
     cairo_t *cr = cairo_create(surface);
 
-	// 清空背景（透明）
-	cairo_set_source_rgba(cr, 0, 0, 0, 1);
-	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-	cairo_paint(cr);
-
-    // 半透明黑色背景
-    cairo_set_source_rgba(cr, 0, 0, 0, 1);
-    cairo_rectangle(cr, 0, 0, width, height);
+	/// 完全不透明黑色背景
+    cairo_set_source_rgba(cr, 0, 0, 0, 1.0);
+    cairo_rectangle(cr, 0, 0, surface_width, surface_height);
     cairo_fill(cr);
 
-    // 绿色文字
-    cairo_select_font_face(cr, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 24);
-    cairo_set_source_rgba(cr, 0, 1, 0, 1); // 绿色
-    cairo_move_to(cr, 10, 35);
-    cairo_show_text(cr, text);
+    // 字体
+    cairo_select_font_face(cr, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 14);
+    cairo_set_source_rgb(cr, 0, 1, 0);  // 绿色
+
+    // 分行绘制
+    char *line = strtok(text, "\n");
+    int y = 20;
+    while (line) {
+        cairo_move_to(cr, 10, y);
+        cairo_show_text(cr, line);
+        y += line_height;
+        line = strtok(NULL, "\n");
+    }
 
     cairo_destroy(cr);
 
@@ -615,8 +649,8 @@ static void update_fps_texture(struct sway_output *output, struct wlr_renderer *
         renderer,
         WL_SHM_FORMAT_ARGB8888,
         cairo_image_surface_get_stride(surface),
-        width,
-        height,
+        surface_width,
+        surface_height,
         cairo_image_surface_get_data(surface)
     );
 
@@ -625,8 +659,8 @@ static void update_fps_texture(struct sway_output *output, struct wlr_renderer *
             wlr_texture_destroy(fps->texture);
         }
         fps->texture = new_texture;
-        fps->width = width;
-        fps->height = height;
+        fps->width = surface_width;
+        fps->height = surface_height;
     }
 
     cairo_surface_destroy(surface);
