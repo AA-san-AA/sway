@@ -567,76 +567,46 @@ static int output_repaint_timer_handler(void *data) {
 
 static void update_fps_texture(struct sway_output *output, struct wlr_renderer *renderer) {
     struct sway_fps_overlay *fps = &output->fps_overlay;
+fprintf(stderr, "[fps] render overlay on output: %p\n", output);
+    // 已有统计数据：fps->current_fps, fps->avg_frametime, fps->dropped_frames
+    // 获取刷新率
+    float refresh_hz = output->wlr_output->refresh / 1000.0f;
 
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
-                     (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
-
-	double frame_time = (now.tv_sec - fps->last_frame_time.tv_sec) +
-                        (now.tv_nsec - fps->last_frame_time.tv_nsec) / 1e9;
-
-	fps->last_frame_time = now;
-
-	// 输出信息获取
-	float refresh_hz = output->wlr_output->refresh / 1000.0f;
-
-    // 平均帧耗时与掉帧判断
-    fps->frame_time_accum += frame_time;
-    fps->frame_count++;
-
-    double expected_frametime = 1.0 / refresh_hz; // 假设目标 60fps
-    if (frame_time > expected_frametime * 1.5) {
-        fps->dropped_frames++;
-    }
-
-    if (elapsed < 1.0) {
-        return; // 每秒更新一次
-    }
-
-    fps->current_fps = fps->frame_count;
-	fps->avg_frametime = fps->frame_time_accum / fps->frame_count;
-    fps->frame_time_accum = 0;
-    fps->frame_count = 0;
-    fps->last_time = now;
-
-    // 文本内容
-    char text[64];
+    // 准备文本
+    char text[128];
     snprintf(text, sizeof(text),
-			"FPS: %zu\n"
-			"Avg: %.1f ms\n"
-			"Drop: %zu\n"
-			"Refresh: %.0f Hz",
-			fps->current_fps,
-			fps->avg_frametime * 1000,
-			fps->dropped_frames,
-			refresh_hz);
+             "FPS: %zu\nAvg: %.1f ms\nDrop: %zu\nRefresh: %.0f Hz\nframe_time: %.1f",
+             fps->current_fps,
+             fps->avg_frametime * 1000,
+             fps->dropped_frames,
+             refresh_hz,
+			 fps->frame_time_accum);
 
-    // Cairo 渲染
+    // Cairo 渲染到 CPU 内存
     int surface_width = 180;
-    int line_height = 18;
-    int line_count = 4;
-    int surface_height = line_height * line_count + 10;
+    int line_height = 16;
+    int line_count = 5;
+    int surface_height = line_height * line_count + 4;
 
     cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
                                                           surface_width, surface_height);
     cairo_t *cr = cairo_create(surface);
 
-	/// 完全不透明黑色背景
-    cairo_set_source_rgba(cr, 0, 0, 0, 1.0);
+    // 半透明黑色背景
+    cairo_set_source_rgba(cr, 0, 0, 0, 1);
     cairo_rectangle(cr, 0, 0, surface_width, surface_height);
     cairo_fill(cr);
 
     // 字体
-    cairo_select_font_face(cr, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(cr, 14);
-    cairo_set_source_rgb(cr, 0, 1, 0);  // 绿色
+    cairo_set_source_rgb(cr, 0, 1, 0); // 绿色
 
     // 分行绘制
     char *line = strtok(text, "\n");
-    int y = 20;
+    int y = 14;
     while (line) {
-        cairo_move_to(cr, 10, y);
+        cairo_move_to(cr, 4, y);
         cairo_show_text(cr, line);
         y += line_height;
         line = strtok(NULL, "\n");
@@ -644,42 +614,26 @@ static void update_fps_texture(struct sway_output *output, struct wlr_renderer *
 
     cairo_destroy(cr);
 
-    // 创建 wlr_texture
-    struct wlr_texture *new_texture = wlr_texture_from_pixels(
-        renderer,
-        WL_SHM_FORMAT_ARGB8888,
-        cairo_image_surface_get_stride(surface),
-        surface_width,
-        surface_height,
-        cairo_image_surface_get_data(surface)
-    );
-
-    if (new_texture) {
-        if (fps->texture) {
-            wlr_texture_destroy(fps->texture);
-        }
-        fps->texture = new_texture;
-        fps->width = surface_width;
-        fps->height = surface_height;
+    // 更新 wlr_texture（复用已有纹理，避免频繁创建销毁）
+    if (!fps->texture) {
+        fps->texture = wlr_texture_from_pixels(renderer,
+                                               WL_SHM_FORMAT_ARGB8888,
+                                               cairo_image_surface_get_stride(surface),
+                                               surface_width,
+                                               surface_height,
+                                               cairo_image_surface_get_data(surface));
+    } else {
+        // 更新现有纹理像素
+        wlr_texture_write_pixels(fps->texture,
+                                 cairo_image_surface_get_stride(surface),
+                                 surface_width, surface_height,
+                                 0, 0, 0, 0,
+                                 cairo_image_surface_get_data(surface));
     }
+    fps->width = surface_width;
+    fps->height = surface_height;
 
     cairo_surface_destroy(surface);
-}
-static void print_fps(struct sway_output *output) {
-    struct sway_fps_overlay *fps = &output->fps_overlay;
-
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
-                     (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
-
-    if (elapsed < 1.0) return;
-
-    fps->current_fps = fps->frame_count;
-    fps->frame_count = 0;
-    fps->last_time = now;
-
-    printf("FPS [%s]: %zu\n", output->wlr_output->name, fps->current_fps);
 }
 #endif
 
@@ -695,8 +649,6 @@ static void damage_handle_frame(struct wl_listener *listener, void *user_data) {
 
 	// 注意：此时还未开始真正的渲染
 	update_fps_texture(output, output->wlr_output->renderer);
-
-	print_fps(output);
 #endif
 	// Compute predicted milliseconds until the next refresh. It's used for
 	// delaying both output rendering and surface frame callbacks.
@@ -979,6 +931,43 @@ static void handle_present(struct wl_listener *listener, void *data) {
 
 static unsigned int last_headless_num = 0;
 
+#if defined(FPS)
+
+static void handle_output_frame(struct wl_listener *listener, void *data) {
+    struct sway_output *output = wl_container_of(listener, output, frame_listener);
+    struct sway_fps_overlay *fps = &output->fps_overlay;
+
+     // 时间计算
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    double frame_time = (now.tv_sec - fps->last_frame_time.tv_sec) +
+                        (now.tv_nsec - fps->last_frame_time.tv_nsec) / 1e9;
+    fps->last_frame_time = now;
+
+    fps->frame_time_accum += frame_time;
+    fps->frame_count++;
+
+	// 掉帧统计
+    double expected = 1.0 / (output->wlr_output->refresh / 1000.0);
+    if (frame_time > expected * 1.5) {
+        fps->dropped_frames++;
+    }
+
+     // 每秒更新一次显示用数据
+    double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
+                     (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
+    if (elapsed >= 1.0) {
+        fps->current_fps = fps->frame_count;
+        fps->avg_frametime = fps->frame_time_accum / fps->frame_count;
+
+        fps->frame_count = 0;
+        fps->frame_time_accum = 0;
+        fps->last_time = now;
+    }
+}
+#endif
+
 void handle_new_output(struct wl_listener *listener, void *data) {
 	struct sway_server *server = wl_container_of(listener, server, new_output);
 	struct wlr_output *wlr_output = data;
@@ -1017,6 +1006,17 @@ void handle_new_output(struct wl_listener *listener, void *data) {
 	}
 	output->server = server;
 	output->damage = wlr_output_damage_create(wlr_output);
+
+#if defined(FPS)
+	// 初始化 FPS overlay 时间戳和计数器
+	memset(&output->fps_overlay, 0, sizeof(output->fps_overlay));
+	clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_time);
+	clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_frame_time);
+
+	// 设置 frame listener
+	output->frame_listener.notify = handle_output_frame;
+	wl_signal_add(&output->wlr_output->events.present, &output->frame_listener);
+#endif
 
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 	output->destroy.notify = handle_destroy;

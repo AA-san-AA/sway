@@ -46,6 +46,7 @@ struct sway_output {
 
 #if defined(FPS)
 	struct sway_fps_overlay fps_overlay;
+    struct wl_listener frame_listener;
 #endif
 
 	struct wl_list layers[4]; // sway_layer_surface::link
