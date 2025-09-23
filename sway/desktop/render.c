@@ -1152,21 +1152,28 @@ renderer_end:
 	wlr_renderer_scissor(renderer, NULL);
 	wlr_output_render_software_cursors(wlr_output, damage);
 #if defined(FPS)
-	struct sway_fps_overlay *fps = &output->fps_overlay;
-
-	if (fps->texture) {
-		struct wlr_box box = {
-			.x = output->wlr_output->width - fps->width - 10,
-			.y = 50,
-			.width = fps->width,
-			.height = fps->height,
-		};
-		float matrix[9];
-		wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, 0,
-			output->wlr_output->transform_matrix);
-		wlr_render_texture_with_matrix(renderer, fps->texture, matrix, 1.0f);
+	bool enable_fps_overlay = false;
+	const char *env = getenv("SWAY_FPS");
+	if (env && strcmp(env, "1") == 0) {
+		enable_fps_overlay = true;
 	}
 
+	if (enable_fps_overlay) {
+		struct sway_fps_overlay *fps = &output->fps_overlay;
+
+		if (fps->texture) {
+			struct wlr_box box = {
+				.x = output->wlr_output->width - fps->width - 10,
+				.y = 50,
+				.width = fps->width,
+				.height = fps->height,
+			};
+			float matrix[9];
+			wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, 0,
+				output->wlr_output->transform_matrix);
+			wlr_render_texture_with_matrix(renderer, fps->texture, matrix, 1.0f);
+		}
+	}
 #endif 
 	wlr_renderer_end(renderer);
 

@@ -575,7 +575,7 @@ fprintf(stderr, "[fps] render overlay on output: %p\n", output);
     // 准备文本
     char text[128];
     snprintf(text, sizeof(text),
-             "FPS: %zu\nAvg: %.1f ms\nDrop: %zu\nRefresh: %.0f Hz\nframe_time: %.1f",
+             "FPS: %zu\nAvg: %.1f ms\nDrop: %zu\nRefresh: %.0f Hz\nframe_time: %.4f",
              fps->current_fps,
              fps->avg_frametime * 1000,
              fps->dropped_frames,
@@ -643,13 +643,7 @@ static void damage_handle_frame(struct wl_listener *listener, void *user_data) {
 	if (!output->enabled || !output->wlr_output->enabled) {
 		return;
 	}
-#if defined(FPS)
-	struct sway_fps_overlay *fps = &output->fps_overlay;
-	fps->frame_count++;
 
-	// 注意：此时还未开始真正的渲染
-	update_fps_texture(output, output->wlr_output->renderer);
-#endif
 	// Compute predicted milliseconds until the next refresh. It's used for
 	// delaying both output rendering and surface frame callbacks.
 	int msec_until_refresh = 0;
@@ -958,13 +952,16 @@ static void handle_output_frame(struct wl_listener *listener, void *data) {
     double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
                      (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
     if (elapsed >= 1.0) {
-        fps->current_fps = fps->frame_count;
+        fps->current_fps = fps->frame_count / elapsed;
         fps->avg_frametime = fps->frame_time_accum / fps->frame_count;
 
         fps->frame_count = 0;
         fps->frame_time_accum = 0;
         fps->last_time = now;
     }
+
+	// 注意：此时只是绘制。
+	update_fps_texture(output, output->wlr_output->renderer);
 }
 #endif
 
@@ -1008,14 +1005,22 @@ void handle_new_output(struct wl_listener *listener, void *data) {
 	output->damage = wlr_output_damage_create(wlr_output);
 
 #if defined(FPS)
-	// 初始化 FPS overlay 时间戳和计数器
-	memset(&output->fps_overlay, 0, sizeof(output->fps_overlay));
-	clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_time);
-	clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_frame_time);
+	bool enable_fps_overlay = false;
+	const char *env = getenv("SWAY_FPS");
+	if (env && strcmp(env, "1") == 0) {
+		enable_fps_overlay = true;
+	}
 
-	// 设置 frame listener
-	output->frame_listener.notify = handle_output_frame;
-	wl_signal_add(&output->wlr_output->events.present, &output->frame_listener);
+	if (enable_fps_overlay) {
+		// 初始化 FPS overlay 时间戳和计数器
+		memset(&output->fps_overlay, 0, sizeof(output->fps_overlay));
+		clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_time);
+		clock_gettime(CLOCK_MONOTONIC, &output->fps_overlay.last_frame_time);
+
+		// 设置 frame listener
+		output->frame_listener.notify = handle_output_frame;
+		wl_signal_add(&output->wlr_output->events.present, &output->frame_listener);
+	}
 #endif
 
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
