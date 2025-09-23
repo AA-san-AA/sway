@@ -32,6 +32,17 @@
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
 
+#define FPS
+#if defined(FPS)
+
+#include <time.h>
+#include <cairo.h>
+#include <wlr/render/wlr_texture.h>
+#include <wlr/render/wlr_renderer.h>
+#define WL_SHM_FORMAT_ARGB8888 0x34325241
+
+#endif 
+
 struct sway_output *output_by_name_or_id(const char *name_or_id) {
 	for (int i = 0; i < root->outputs->length; ++i) {
 		struct sway_output *output = root->outputs->items[i];
@@ -552,13 +563,107 @@ static int output_repaint_timer_handler(void *data) {
 	return 0;
 }
 
+#if defined(FPS)
+
+static void update_fps_texture(struct sway_output *output, struct wlr_renderer *renderer) {
+    struct sway_fps_overlay *fps = &output->fps_overlay;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
+                     (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
+
+    if (elapsed < 1.0) {
+        return; // 每秒更新一次
+    }
+
+    fps->current_fps = fps->frame_count;
+    fps->frame_count = 0;
+    fps->last_time = now;
+
+    // 文本内容
+    char text[64];
+    snprintf(text, sizeof(text), "FPS: %zu", fps->current_fps);
+
+    // Cairo 渲染
+    int width = 200;
+    int height = 50;
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    cairo_t *cr = cairo_create(surface);
+
+	// 清空背景（透明）
+	cairo_set_source_rgba(cr, 0, 0, 0, 1);
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+	cairo_paint(cr);
+
+    // 半透明黑色背景
+    cairo_set_source_rgba(cr, 0, 0, 0, 1);
+    cairo_rectangle(cr, 0, 0, width, height);
+    cairo_fill(cr);
+
+    // 绿色文字
+    cairo_select_font_face(cr, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 24);
+    cairo_set_source_rgba(cr, 0, 1, 0, 1); // 绿色
+    cairo_move_to(cr, 10, 35);
+    cairo_show_text(cr, text);
+
+    cairo_destroy(cr);
+
+    // 创建 wlr_texture
+    struct wlr_texture *new_texture = wlr_texture_from_pixels(
+        renderer,
+        WL_SHM_FORMAT_ARGB8888,
+        cairo_image_surface_get_stride(surface),
+        width,
+        height,
+        cairo_image_surface_get_data(surface)
+    );
+
+    if (new_texture) {
+        if (fps->texture) {
+            wlr_texture_destroy(fps->texture);
+        }
+        fps->texture = new_texture;
+        fps->width = width;
+        fps->height = height;
+    }
+
+    cairo_surface_destroy(surface);
+}
+static void print_fps(struct sway_output *output) {
+    struct sway_fps_overlay *fps = &output->fps_overlay;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double elapsed = (now.tv_sec - fps->last_time.tv_sec) +
+                     (now.tv_nsec - fps->last_time.tv_nsec) / 1e9;
+
+    if (elapsed < 1.0) return;
+
+    fps->current_fps = fps->frame_count;
+    fps->frame_count = 0;
+    fps->last_time = now;
+
+    printf("FPS [%s]: %zu\n", output->wlr_output->name, fps->current_fps);
+}
+#endif
+
 static void damage_handle_frame(struct wl_listener *listener, void *user_data) {
 	struct sway_output *output =
 		wl_container_of(listener, output, damage_frame);
 	if (!output->enabled || !output->wlr_output->enabled) {
 		return;
 	}
+#if defined(FPS)
+	struct sway_fps_overlay *fps = &output->fps_overlay;
+	fps->frame_count++;
 
+	// 注意：此时还未开始真正的渲染
+	update_fps_texture(output, output->wlr_output->renderer);
+
+	print_fps(output);
+#endif
 	// Compute predicted milliseconds until the next refresh. It's used for
 	// delaying both output rendering and surface frame callbacks.
 	int msec_until_refresh = 0;

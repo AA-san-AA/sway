@@ -8,6 +8,22 @@
 #include "sway/tree/node.h"
 #include "sway/tree/view.h"
 
+#define FPS
+#if defined(FPS)
+#include <wlr/render/wlr_texture.h>
+#include <time.h>
+
+struct sway_fps_overlay {
+	size_t frame_count;
+	size_t current_fps;
+	struct timespec last_time;
+	struct wlr_texture *texture;
+	int width;
+	int height;
+};
+
+#endif
+
 struct sway_server;
 struct sway_container;
 
@@ -21,6 +37,10 @@ struct sway_output {
 	struct wlr_output *wlr_output;
 	struct sway_server *server;
 	struct wl_list link;
+
+#if defined(FPS)
+	struct sway_fps_overlay fps_overlay;
+#endif
 
 	struct wl_list layers[4]; // sway_layer_surface::link
 	struct wlr_box usable_area;
